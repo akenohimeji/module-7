@@ -1,64 +1,51 @@
 ﻿#include <iostream>
-#include <thread>
-#include <chrono>
-#include <atomic>
+#include <vector>
+#include <future>
+#include <algorithm>
+#include <utility>
 
-std::atomic<int> client_counter(0);
-
-// Варианты упорядочения: 
-// std::memory_order_relaxed
-// std::memory_order_acquire / release
-// std::memory_order_seq_cst (по умолчанию)
-
-void client_stream(int max_clients, std::memory_order order) {
-    for (int i = 0; i < max_clients; ++i) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        // Атомарное прибавление с заданным порядком
-        client_counter.fetch_add(1, order);
-
-        // Чтение для вывода тоже должно быть атомарным
-        std::cout << "[Клиент] Пришел. Всего: " << client_counter.load(order) << std::endl;
-    }
-}
-
-void operator_stream(int max_clients, std::memory_order load_order, std::memory_order modify_order) {
-    int served_count = 0;
-    while (served_count < max_clients) {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-
-        // Сначала загружаем текущее значение
-        if (client_counter.load(load_order) > 0) {
-            client_counter.fetch_sub(1, modify_order);
-            served_count++;
-            std::cout << "[Оператор] Обслужил. Осталось: " << client_counter.load(load_order) << std::endl;
-        }
-        else {
-            std::cout << "[Оператор] Ждет..." << std::endl;
+void find_min_index_async(const std::vector<int>& vec, size_t start_idx, std::promise<size_t> promise_obj) {
+    size_t min_idx = start_idx;
+    for (size_t i = start_idx + 1; i < vec.size(); ++i) {
+        if (vec[i] < vec[min_idx]) {
+            min_idx = i;
         }
     }
+    promise_obj.set_value(min_idx);
 }
 
-void run_simulation(std::string name, std::memory_order order) {
-    client_counter.store(0); // сброс
-    std::cout << "\n>>> Тест режима: " << name << " <<<\n";
+void selection_sort(std::vector<int>& vec) {
+    size_t n = vec.size();
 
-    std::thread t1(client_stream, 5, order);
-    std::thread t2(operator_stream, 5, order, order);
+    for (size_t i = 0; i < n - 1; ++i) {
+        std::promise<size_t> min_idx_promise;
+        std::future<size_t> min_idx_future = min_idx_promise.get_future();
 
-    t1.join();
-    t2.join();
+        std::thread worker(find_min_index_async, std::cref(vec), i, std::move(min_idx_promise));
+
+        size_t min_idx = min_idx_future.get();
+
+        worker.join();
+
+        if (min_idx != i) {
+            std::swap(vec[i], vec[min_idx]);
+        }
+    }
 }
 
 int main() {
     setlocale(LC_ALL, "Russian");
+    std::vector<int> data = { 64, 25, 12, 22, 11, 90, 4, 75 };
 
-    // 1. Самый строгий режим (Sequence Consistent)
-    run_simulation("memory_order_seq_cst", std::memory_order_seq_cst);
+    std::cout << "Исходный массив: ";
+    for (int num : data) std::cout << num << " ";
+    std::cout << "\n";
 
-    // 2. Ослабленный режим (Relaxed)
-    // В данной задаче он тоже сработает, так как нет зависимости по данным между потоками
-    run_simulation("memory_order_relaxed", std::memory_order_relaxed);
+    selection_sort(data);
+
+    std::cout << "Отсортированный массив: ";
+    for (int num : data) std::cout << num << " ";
+    std::cout << "\n";
 
     return 0;
 }

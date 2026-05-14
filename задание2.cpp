@@ -1,66 +1,51 @@
 ﻿#include <iostream>
 #include <vector>
-#include <thread>
-#include <chrono>
-#include <mutex>
-#include <iomanip>
+#include <future>
+#include <algorithm>
+#include <iterator>
 
-std::mutex console_mtx; // Для предотвращения перемешивания вывода
+constexpr size_t MIN_ELEMENTS_PER_THREAD = 4;
 
-void draw_progress_bar(int thread_num, std::thread::id tid, int length) {
-    auto start_time = std::chrono::high_resolution_clock::now();
+template<typename Iterator, typename Func>
+void parallel_for_each(Iterator first, Iterator last, Func f) {
+    size_t length = std::distance(first, last);
 
-    // Подготовка строки: номер и ID
-    {
-        std::lock_guard<std::mutex> lock(console_mtx);
-        std::cout << "\033[" << thread_num + 1 << ";1H"; // Переход на строку потока
-        std::cout << thread_num << " [" << tid << "]: ";
+    if (length <= MIN_ELEMENTS_PER_THREAD) {
+        std::for_each(first, last, f);
+        return;
     }
 
-    for (int i = 0; i < length; ++i) {
-        // Имитация "расчета"
-        std::this_thread::sleep_for(std::chrono::milliseconds(100 + (rand() % 100)));
+    Iterator midpoint = first;
+    std::advance(midpoint, length / 2);
 
-        {
-            std::lock_guard<std::mutex> lock(console_mtx);
-            std::cout << "\033[" << thread_num + 1 << ";25H"; // Позиция начала бара
-            for (int j = 0; j <= i; ++j) std::cout << "█";
-            std::cout << std::flush;
-        }
-    }
+    std::future<void> first_half_future = std::async(
+        std::launch::async,
+        parallel_for_each<Iterator, Func>,
+        first, midpoint, f
+    );
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
+    parallel_for_each(midpoint, last, f);
 
-    // Вывод времени в конце строки
-    {
-        std::lock_guard<std::mutex> lock(console_mtx);
-        std::cout << "  " << std::fixed << std::setprecision(2) << elapsed.count() << "s" << std::endl;
-    }
+    first_half_future.get();
 }
 
 int main() {
-    const int num_threads = 5;  // Количество потоков
-    const int bar_length = 20;  // Длина прогресс-бара
+    setlocale(LC_ALL, "Russian");
+    std::vector<int> numbers = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
 
-    // Очистка экрана
-    std::cout << "\033[2J" << std::flush;
+    std::cout << "Исходный массив: ";
+    for (int n : numbers) std::cout << n << " ";
+    std::cout << "\n";
 
-    std::vector<std::thread> threads;
+    auto multiply_by_two = [](int& n) {
+        n *= 2;
+        };
 
-    for (int i = 0; i < num_threads; ++i) {
-        // Создаем поток. Передаем i как порядковый номер.
-        threads.emplace_back([i, bar_length]() {
-            draw_progress_bar(i, std::this_thread::get_id(), bar_length);
-            });
-    }
+    parallel_for_each(numbers.begin(), numbers.end(), multiply_by_two);
 
-    for (auto& t : threads) {
-        t.join();
-    }
-
-    // Перемещаем курсор вниз, чтобы текст после программы не затирал бары
-    std::cout << "\033[" << num_threads + 2 << ";1H" << "Расчеты завершены." << std::endl;
+    std::cout << "После обработки: ";
+    for (int n : numbers) std::cout << n << " ";
+    std::cout << "\n";
 
     return 0;
 }
